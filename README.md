@@ -14,9 +14,8 @@ AI-DocInsight is a document retrieval and question-answering system powered by R
 # Installation
 ```
 conda env create -n langchain --file langchain.yml
-pip install langchain langchain-community langchain-ollama langgraph transformers unstructured
+pip install langchain langchain-community langchain-ollama langgraph transformers unstructured gradio pymupdf
 conda install conda-forge::faiss-gpu
-pip install gradio langchain_community pymupdf 
 ```
 
 # Usage
