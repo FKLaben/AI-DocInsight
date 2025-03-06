@@ -1,19 +1,17 @@
 import gradio as gr
-from langchain_community.document_loaders import PyMuPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Chroma
+
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import OllamaEmbeddings
 import ollama
 import re
 import datetime
 
-from tkinter import Tk, filedialog
-
 
 from typing import IO, Any, cast
 
-import chainlit as cl
+
+import zipfile
+import shutil
 
 
 def process(index_name):
@@ -21,8 +19,16 @@ def process(index_name):
     print('OllamaEmbeddings - {date:%Y-%m-%d_%H:%M:%S}'.format( date=datetime.datetime.now() ))
     embeddings = OllamaEmbeddings(model="mistral-small:24b")
     
+
+    # Extract the contents of the zip archive
+    extract_path = f"{index_name}.unzipped"
+    with zipfile.ZipFile(index_name, 'r') as zipf:
+        zipf.extractall(extract_path)
+
+    # Load the FAISS index from the extracted directory
+
     print('FAISS.from_documents - {date:%Y-%m-%d_%H:%M:%S}'.format( date=datetime.datetime.now() ))
-    vectorstore = FAISS.load_local(index_name, embeddings, allow_dangerous_deserialization=True)
+    vectorstore = FAISS.load_local(extract_path, embeddings, allow_dangerous_deserialization=True)
     
     print('vectorstore.as_retriever() - {date:%Y-%m-%d_%H:%M:%S}'.format( date=datetime.datetime.now() ))
     retriever = vectorstore.as_retriever()
@@ -75,91 +81,53 @@ def rag_chain(question, vectorstore, retriever):
     
     return answer
     
-    
 def process_question(index_name, question):
+
     vectorstore, retriever = process(index_name)
     result = rag_chain(question, vectorstore, retriever)
+    shutil.rmtree(f"{index_name}.unzipped")
     return {result}
     
 
-def get_folder_path(folder_path: str = "") -> str:
-    """
-    Opens a folder dialog to select a folder, allowing the user to navigate and choose a folder.
-    If no folder is selected, returns the initially provided folder path or an empty string if not provided.
-    This function is conditioned to skip the folder dialog on macOS or if specific environment variables are present,
-    indicating a possible automated environment where a dialog cannot be displayed.
-
-    Parameters:
-    - folder_path (str): The initial folder path or an empty string by default. Used as the fallback if no folder is selected.
-
-    Returns:
-    - str: The path of the folder selected by the user, or the initial `folder_path` if no selection is made.
-
-    Raises:
-    - TypeError: If `folder_path` is not a string.
-    - EnvironmentError: If there's an issue accessing environment variables.
-    - RuntimeError: If there's an issue initializing the folder dialog.
-
-    Note:
-    - The function checks the `ENV_EXCLUSION` list against environment variables to determine if the folder dialog should be skipped, aiming to prevent its appearance during automated operations.
-    - The dialog will also be skipped on macOS (`sys.platform != "darwin"`) as a specific behavior adjustment.
-    - Credit: MalumaDev https://github.com/gradio-app/gradio/issues/2515#issuecomment-2393151550
-    """
-    # Validate parameter type
-    if not isinstance(folder_path, str):
-        raise TypeError("folder_path must be a string")
-
-    try:
-        root = Tk()
-        root.withdraw()
-        root.wm_attributes("-topmost", 1)
-        selected_folder = filedialog.askdirectory(initialdir=folder_path or ".")
-        root.destroy()
-        return selected_folder or folder_path
-    except Exception as e:
-        raise RuntimeError(f"Error initializing folder dialog: {e}") from e
-
-
-def create_folder_ui(path="./"):
-    with gr.Row():
-        text_box = gr.Textbox(
-            label="path",
-            info="Path",
-            lines=1,
-            value=path,
-        )
-        button = gr.Button(value="\U0001f5c0", inputs=text_box, min_width=24)
-
-        button.click(
-            lambda: get_folder_path(text_box.value),
-            outputs=[text_box],
-        )
-
-    return text_box, button
-
-# Function to handle button click and update the folder path textbox
-def select_folder_click():
-    selected_path = get_folder_path()
-    return selected_path
+def display_file_path(file):
+    # Display the file path in a textbox
+    return f"Selected file: {file}"
 
 with gr.Blocks() as demo:
     with gr.Row():
-        select_button = gr.Button("Select Folder", elem_id="select-folder-button")
-        folder_textbox = gr.Textbox(label="Selected Folder Path")
+        # File explorer component to select the ZIP file
+        file_explorer = gr.FileExplorer(label="Select ZIP file")
 
-        # Attach the button click event to update the textbox
-        select_button.click(select_folder_click, inputs=[], outputs=[folder_textbox])
-    
+        # Textbox to display the selected file path
+        file_path_output = gr.Textbox(label="File Path", interactive=False)
+
     with gr.Row():
-        question_input = gr.Textbox(label="Enter your question here...", placeholder="What files are in this directory?")
-        submit_btn = gr.Button("Submit")
+        # Textbox for the user to ask a question
+        question_input = gr.Textbox(label="Ask a question about the ZIP file")
 
-    # Add question prompt and answer input
-    with gr.Row():
-        gr.Markdown("Response:")
-        output_text = gr.Textbox(label="Response")
+        # Button to trigger processing
+        process_button = gr.Button("Process Question")
 
-    submit_btn.click(fn=process_question, inputs=[folder_textbox, question_input], outputs=output_text)
+        # Output component for the processed question result
+        output = gr.Textbox(label="Output", interactive=False)
 
-# Launch the interface
+    # Define the function to be called when the process button is clicked
+    def on_process_button_click(file, question):
+        if not file:
+            return "Please select a file first.", ""
+        result = process_question(file[0], question)
+        return display_file_path(file[0]), result
+
+    # Event listener for file selection change
+    def on_file_selection_change(files):
+        if files:
+            return display_file_path(files[0])
+        else:
+            return ""
+
+    # Event listeners
+    file_explorer.change(on_file_selection_change, inputs=file_explorer, outputs=file_path_output)
+    process_button.click(on_process_button_click, inputs=[file_explorer, question_input], outputs=[file_path_output, output])
+
+# Launch the Gradio interface
 demo.launch()
